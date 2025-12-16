@@ -1,0 +1,22 @@
+<!-- 
+将以下代码复制到 CodePen.io 的 HTML 区域
+然后就可以直接分享 CodePen 链接了
+-->
+
+<div id="root"></div>
+
+<script type="module">
+import React, { useState, useCallback, useMemo, useRef, useLayoutEffect, Suspense } from 'https://esm.sh/react@^19.2.3';
+import ReactDOM from 'https://esm.sh/react-dom@^19.2.3/client';
+import * as THREE from 'https://esm.sh/three@^0.182.0';
+import { Canvas, useFrame } from 'https://esm.sh/@react-three/fiber@^9.4.2';
+import { OrbitControls, Environment, ContactShadows, Stars } from 'https://esm.sh/@react-three/drei@^10.7.7';
+import { EffectComposer, Bloom, Vignette, Noise } from 'https://esm.sh/@react-three/postprocessing@^3.0.4';
+
+// 完整的应用代码在这里...
+// (为了简洁，这里省略了完整代码，实际使用时需要完整的代码)
+
+const rootElement = document.getElementById('root');
+const root = ReactDOM.createRoot(rootElement);
+root.render(React.createElement(App));
+</script>

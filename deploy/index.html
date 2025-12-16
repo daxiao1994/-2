@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Arix Signature Tree - Standalone</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; padding: 0; background-color: #000502; overflow: hidden; }
+        ::-webkit-scrollbar { display: none; }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@^19.2.3",
+            "react-dom/client": "https://esm.sh/react-dom@^19.2.3/client",
+            "three": "https://esm.sh/three@^0.182.0",
+            "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.4.2",
+            "@react-three/drei": "https://esm.sh/@react-three/drei@^10.7.7",
+            "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@^3.0.4"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="module">
+        import React, { useState, useCallback, useMemo, useRef, useLayoutEffect, Suspense } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import * as THREE from 'three';
+        import { Canvas, useFrame } from '@react-three/fiber';
+        import { OrbitControls, Environment, ContactShadows, Stars } from '@react-three/drei';
+        import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
+
+        // Types and Constants
+        const TreeState = {
+            SCATTERED: 'SCATTERED',
+            TREE_SHAPE: 'TREE_SHAPE'
+        };
+
+        const COLORS = {
+            EMERALD_DEEP: new THREE.Color('#002415'),
+            EMERALD_LITE: new THREE.Color('#005c38'),
+            GOLD_METALLIC: new THREE.Color('#FFD700'),
+            GOLD_ROSE: new THREE.Color('#C5A059'),
+            VOID: '#000502',
+        };
+
+        const GIFT_PALETTE = [
+            new THREE.Color('#8a0000'), // Deep Red
+            new THREE.Color('#003311'), // Deep Green
+            new THREE.Color('#d4af37'), // Gold
+            new THREE.Color('#ffffff'), // Silver/White
+            new THREE.Color('#1a1a1a'), // Black wrapping
+        ];
+
+        const NEON_PALETTE = [
+            new THREE.Color('#ff00ff'), // Magenta
+            new THREE.Color('#00ffff'), // Cyan
+            new THREE.Color('#ffff00'), // Yellow
+            new THREE.Color('#ff3333'), // Red Glow
+            new THREE.Color('#33ff33'), // Lime
+        ];
+
+        const TREE_CONFIG = {
+            height: 12,
+            radius: 4.5,
+            particleCount: 1500,
+            ornamentCount: 300,
+            scatterRadius: 25,
+        };
+
+        const ANIMATION_SPEED = 2.5;
+
+        // Helper functions
+        const generateParticles = (count, type) => {
+            const particles = [];
+
+            for (let i = 0; i < count; i++) {
+                const hNorm = Math.random(); 
+                const y = (hNorm - 0.5) * TREE_CONFIG.height;
+                const rAtHeight = (1 - hNorm) * TREE_CONFIG.radius;
+                
+                const rScale = type === 'GLOW' ? 0.6 + Math.random() * 0.6 : Math.random();
+                const r = rAtHeight * rScale; 
+                
+                const theta = Math.random() * Math.PI * 2;
+                const x = r * Math.cos(theta);
+                const z = r * Math.sin(theta);
+                
+                const treePos = new THREE.Vector3(x, y, z);
+
+                const u = Math.random();
+                const v = Math.random();
+                const theta_s = 2 * Math.PI * u;
+                const phi_s = Math.acos(2 * v - 1);
+                const r_s = Math.cbrt(Math.random()) * TREE_CONFIG.scatterRadius; 
+                
+                const sx = r_s * Math.sin(phi_s) * Math.cos(theta_s);
+                const sy = r_s * Math.sin(phi_s) * Math.sin(theta_s);
+                const sz = r_s * Math.cos(phi_s);
+
+                const scatterPos = new THREE.Vector3(sx, sy, sz);
+
+                const rotation = new THREE.Euler(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+                
+                let scale = 1;
+                let color = new THREE.Color();
+
+                if (type === 'BOX') {
+                    scale = 0.3 + Math.random() * 0.5;
+                    const colorIdx = Math.floor(Math.random() * GIFT_PALETTE.length);
+                    color = GIFT_PALETTE[colorIdx].clone();
+                } else {
+                    scale = 0.1 + Math.random() * 0.2;
+                    const colorIdx = Math.floor(Math.random() * NEON_PALETTE.length);
+                    color = NEON_PALETTE[colorIdx].clone();
+                }
+
+                particles.push({
+                    id: i,
+                    scatterPosition: scatterPos,
+                    treePosition: treePos,
+                    rotation,
+                    scale,
+                    type,
+                    color,
+                });
+            }
+            return particles;
+        };
+
+        const generateStar = () => {
+            const y = TREE_CONFIG.height / 2 + 0.5;
+            const treePos = new THREE.Vector3(0, y, 0);
+            
+            const scatterPos = new THREE.Vector3(
+                (Math.random() - 0.5) * 20, 
+                20 + Math.random() * 10, 
+                (Math.random() - 0.5) * 20
+            );
+
+            return {
+                id: 9999,
+                scatterPosition: scatterPos,
+                treePosition: treePos,
+                rotation: new THREE.Euler(0, 0, 0),
+                scale: 1.5,
+                type: 'STAR',
+                color: COLORS.GOLD_METALLIC
+            };
+        };
+
+        // TreeParticles Component
+        const TreeParticles = ({ treeState }) => {
+            const boxesMesh = useRef();
+            const glowMesh = useRef();
+            const starMesh = useRef();
+
+            const boxesData = useMemo(() => generateParticles(TREE_CONFIG.particleCount, 'BOX'), []);
+            const glowData = useMemo(() => generateParticles(TREE_CONFIG.ornamentCount, 'GLOW'), []);
+            const starData = useMemo(() => generateStar(), []);
+
+            const morphFactor = useRef(0);
+            const dummy = useMemo(() => new THREE.Object3D(), []);
+
+            useLayoutEffect(() => {
+                if (boxesMesh.current) {
+                    boxesData.forEach((data, i) => boxesMesh.current.setColorAt(i, data.color));
+                    boxesMesh.current.instanceColor.needsUpdate = true;
+                }
+                if (glowMesh.current) {
+                    glowData.forEach((data, i) => glowMesh.current.setColorAt(i, data.color));
+                    glowMesh.current.instanceColor.needsUpdate = true;
+                }
+            }, [boxesData, glowData]);
+
+            useFrame((state, delta) => {
+                const target = treeState === TreeState.TREE_SHAPE ? 1 : 0;
+                const step = delta * ANIMATION_SPEED;
+                
+                if (Math.abs(morphFactor.current - target) > 0.001) {
+                    morphFactor.current = THREE.MathUtils.lerp(morphFactor.current, target, step);
+                } else {
+                    morphFactor.current = target; 
+                }
+                const t = morphFactor.current;
+                
+                const time = state.clock.getElapsedTime();
+                const hoverY = t > 0.9 ? Math.sin(time * 0.5) * 0.2 : 0;
+
+                if (boxesMesh.current) {
+                    for (let i = 0; i < boxesData.length; i++) {
+                        const { scatterPosition, treePosition, rotation, scale } = boxesData[i];
+                        
+                        dummy.position.lerpVectors(scatterPosition, treePosition, t);
+                        dummy.position.y += hoverY;
+                        
+                        const tumbleSpeed = (1 - t) * 2.0;
+                        dummy.rotation.set(
+                            rotation.x + time * tumbleSpeed, 
+                            rotation.y + time * tumbleSpeed, 
+                            rotation.z + time * tumbleSpeed
+                        );
+                        
+                        const currentScale = THREE.MathUtils.lerp(0.0, scale, t * 0.8 + 0.2);
+                        dummy.scale.set(currentScale, currentScale, currentScale);
+
+                        dummy.updateMatrix();
+                        boxesMesh.current.setMatrixAt(i, dummy.matrix);
+                    }
+                    boxesMesh.current.instanceMatrix.needsUpdate = true;
+                }
+
+                if (glowMesh.current) {
+                    for (let i = 0; i < glowData.length; i++) {
+                        const { scatterPosition, treePosition, scale } = glowData[i];
+
+                        const orbitOffset = t * Math.sin(time + i) * 0.3;
+                        
+                        const tempTreePos = treePosition.clone();
+                        tempTreePos.x += Math.cos(time * 2 + i) * orbitOffset;
+                        tempTreePos.z += Math.sin(time * 2 + i) * orbitOffset;
+
+                        dummy.position.lerpVectors(scatterPosition, tempTreePos, t);
+                        dummy.position.y += hoverY;
+                        
+                        const pulse = 1 + Math.sin(time * 3 + i) * 0.3;
+                        const currentScale = scale * pulse;
+                        
+                        dummy.rotation.set(0, 0, 0);
+                        dummy.scale.set(currentScale, currentScale, currentScale);
+                        
+                        dummy.updateMatrix();
+                        glowMesh.current.setMatrixAt(i, dummy.matrix);
+                    }
+                    glowMesh.current.instanceMatrix.needsUpdate = true;
+                }
+
+                if (starMesh.current) {
+                    const { scatterPosition, treePosition } = starData;
+                    starMesh.current.position.lerpVectors(scatterPosition, treePosition, t);
+                    starMesh.current.position.y += hoverY;
+                    
+                    starMesh.current.rotation.y = time * 0.5;
+                    starMesh.current.rotation.z = Math.sin(time) * 0.1;
+
+                    const starScale = THREE.MathUtils.lerp(0.1, 1.2, t);
+                    starMesh.current.scale.set(starScale, starScale, starScale);
+                }
+            });
+
+            return React.createElement('group', null,
+                React.createElement('instancedMesh', {
+                    ref: boxesMesh,
+                    args: [undefined, undefined, boxesData.length],
+                    castShadow: true,
+                    receiveShadow: true
+                },
+                    React.createElement('boxGeometry', { args: [1, 1, 1] }),
+                    React.createElement('meshStandardMaterial', { 
+                        roughness: 0.2,
+                        metalness: 0.8,
+                        envMapIntensity: 1
+                    })
+                ),
+                React.createElement('instancedMesh', {
+                    ref: glowMesh,
+                    args: [undefined, undefined, glowData.length]
+                },
+                    React.createElement('icosahedronGeometry', { args: [1, 0] }),
+                    React.createElement('meshStandardMaterial', { 
+                        toneMapped: false,
+                        color: "white",
+                        emissive: "white",
+                        emissiveIntensity: 4,
+                        roughness: 0.1
+                    })
+                ),
+                React.createElement('mesh', { ref: starMesh, castShadow: true },
+                    React.createElement('octahedronGeometry', { args: [1, 0] }),
+                    React.createElement('meshStandardMaterial', { 
+                        color: COLORS.GOLD_METALLIC,
+                        emissive: COLORS.GOLD_METALLIC,
+                        emissiveIntensity: 2,
+                        roughness: 0,
+                        metalness: 1
+                    })
+                )
+            );
+        };
+
+        // Scene Component
+        const Scene = ({ treeState }) => {
+            return React.createElement('div', { 
+                className: "absolute inset-0 z-0 bg-gradient-to-b from-black to-[#00100a]" 
+            },
+                React.createElement(Canvas, {
+                    shadows: true,
+                    camera: { position: [0, 2, 25], fov: 45 },
+                    gl: { antialias: false, toneMappingExposure: 1.5 },
+                    dpr: [1, 2]
+                },
+                    React.createElement('ambientLight', { intensity: 0.2 }),
+                    React.createElement('spotLight', { 
+                        position: [10, 20, 10], 
+                        angle: 0.5, 
+                        penumbra: 1, 
+                        intensity: 2, 
+                        castShadow: true, 
+                        'shadow-bias': -0.0001,
+                        color: "#ffeebb"
+                    }),
+                    React.createElement('pointLight', { 
+                        position: [-10, 5, -10], 
+                        intensity: 2, 
+                        color: "#00ff88", 
+                        distance: 30 
+                    }),
+                    React.createElement('pointLight', { 
+                        position: [-10, -10, 10], 
+                        intensity: 0.5, 
+                        color: "#444444" 
+                    }),
+                    React.createElement(Suspense, { fallback: null },
+                        React.createElement(TreeParticles, { treeState }),
+                        React.createElement(Stars, { 
+                            radius: 100, 
+                            depth: 50, 
+                            count: 5000, 
+                            factor: 4, 
+                            saturation: 0, 
+                            fade: true, 
+                            speed: 1 
+                        }),
+                        React.createElement(Environment, { preset: "city" })
+                    ),
+                    React.createElement(ContactShadows, { 
+                        resolution: 1024, 
+                        scale: 50, 
+                        blur: 2, 
+                        opacity: 0.5, 
+                        far: 10, 
+                        color: "#000000" 
+                    }),
+                    React.createElement(OrbitControls, { 
+                        enablePan: false,
+                        autoRotate: true,
+                        autoRotateSpeed: treeState === TreeState.TREE_SHAPE ? 0.8 : 0.2,
+                        minPolarAngle: Math.PI / 4,
+                        maxPolarAngle: Math.PI / 1.5
+                    }),
+                    React.createElement(EffectComposer, { enableNormalPass: false },
+                        React.createElement(Bloom, { 
+                            luminanceThreshold: 0.8, 
+                            mipmapBlur: true, 
+                            intensity: 1.5, 
+                            radius: 0.4
+                        }),
+                        React.createElement(Noise, { opacity: 0.02 }),
+                        React.createElement(Vignette, { eskil: false, offset: 0.1, darkness: 0.6 })
+                    )
+                )
+            );
+        };
+
+        // UIOverlay Component
+        const UIOverlay = ({ treeState, onToggle }) => {
+            const isTree = treeState === TreeState.TREE_SHAPE;
+
+            return React.createElement('div', { 
+                className: "absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-8 md:p-12" 
+            },
+                React.createElement('header', { className: "flex flex-col items-start space-y-2" },
+                    React.createElement('h1', { 
+                        className: "text-4xl md:text-6xl font-serif text-transparent bg-clip-text bg-gradient-to-r from-yellow-200 via-yellow-400 to-yellow-600 tracking-wider drop-shadow-lg" 
+                    }, "ARIX"),
+                    React.createElement('div', { className: "h-[1px] w-24 bg-yellow-500/50" }),
+                    React.createElement('p', { 
+                        className: "text-emerald-400/80 text-xs md:text-sm tracking-[0.3em] uppercase font-light" 
+                    }, "Signature Collection")
+                ),
+                React.createElement('footer', { 
+                    className: "flex flex-col md:flex-row justify-between items-end md:items-center w-full" 
+                },
+                    React.createElement('div', { 
+                        className: "text-white/40 text-[10px] md:text-xs font-mono mb-4 md:mb-0" 
+                    },
+                        React.createElement('p', null, `COORDINATES: ${isTree ? 'LOCKED' : 'DRIFTING'}`),
+                        React.createElement('p', null, `SYSTEM STATUS: ${isTree ? 'CONVERGED' : 'SCATTERED'}`)
+                    ),
+                    React.createElement('button', {
+                        onClick: onToggle,
+                        className: `
+                            pointer-events-auto
+                            group relative px-8 py-4 
+                            border border-yellow-500/30 
+                            bg-black/40 backdrop-blur-md 
+                            overflow-hidden transition-all duration-500 ease-out
+                            hover:border-yellow-400 hover:bg-emerald-900/30
+                        `
+                    },
+                        React.createElement('div', { 
+                            className: "absolute inset-0 w-0 bg-gradient-to-r from-yellow-500/20 to-transparent transition-all duration-[700ms] ease-out group-hover:w-full" 
+                        }),
+                        React.createElement('span', { 
+                            className: "relative z-10 font-serif text-yellow-100 tracking-widest text-lg md:text-xl transition-colors duration-300 group-hover:text-white" 
+                        }, isTree ? 'RELEASE MAGIC' : 'ASSEMBLE TREE'),
+                        React.createElement('span', { 
+                            className: "absolute top-0 left-0 w-2 h-2 border-t border-l border-yellow-500 transition-all duration-300 group-hover:w-full group-hover:h-full opacity-50" 
+                        }),
+                        React.createElement('span', { 
+                            className: "absolute bottom-0 right-0 w-2 h-2 border-b border-r border-yellow-500 transition-all duration-300 group-hover:w-full group-hover:h-full opacity-50" 
+                        })
+                    )
+                )
+            );
+        };
+
+        // Main App Component
+        const App = () => {
+            const [treeState, setTreeState] = useState(TreeState.TREE_SHAPE);
+
+            const toggleState = useCallback(() => {
+                setTreeState((prev) => 
+                    prev === TreeState.TREE_SHAPE ? TreeState.SCATTERED : TreeState.TREE_SHAPE
+                );
+            }, []);
+
+            return React.createElement('div', { 
+                className: "relative w-full h-screen overflow-hidden bg-black" 
+            },
+                React.createElement(Scene, { treeState }),
+                React.createElement(UIOverlay, { treeState, onToggle: toggleState })
+            );
+        };
+
+        // Render the app
+        const rootElement = document.getElementById('root');
+        if (!rootElement) {
+            throw new Error("Could not find root element to mount to");
+        }
+
+        const root = ReactDOM.createRoot(rootElement);
+        root.render(React.createElement(React.StrictMode, null, React.createElement(App)));
+    </script>
+</body>
+</html>
